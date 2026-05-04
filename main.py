@@ -1,201 +1,281 @@
 import discord
 from discord.ext import commands
+import asyncio
+import json
 import os
+from collections import defaultdict
+from datetime import datetime
 
-# ===== Discord設定 =====
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
 intents.members = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== 設定 =====
-CHANNEL_ID = 1500520708974051498
+# =====================
+# チャンネル設定（固定）
+# =====================
+CHANNEL_ID = 1500520708974051498        # 診断専用
+RESULT_CHANNEL_ID = 1500500850311954534  # 管理チャンネル
 
-# ===== 質問 =====
+DATA_FILE = "data.json"
+
+# =====================
+# データ管理
+# =====================
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {
+            "house_count": {},
+            "daily_log": {},
+            "completed": [],
+            "active_sessions": {}
+        }
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+data = load_data()
+
+completed = set()
+
+# =====================
+# 質問
+# =====================
 questions = [
-    {
-        "question": "…ふむ。暗い森の中で、遠くにかすかな光が見える。お前ならどうする？",
-        "options": {
-            "A": ("慎重に様子を見ながら近づく", "ravenclaw"),
-            "B": ("危険でもまっすぐ進む", "gryffindor"),
-            "C": ("役に立つものがないか周囲を探す", "slytherin"),
-            "D": ("仲間を探して一緒に進む", "hufflepuff")
-        }
-    },
-    {
-        "question": "授業の後、誰もいない教室に不思議な箱が残されている…どうする？",
-        "options": {
-            "A": ("中身を推理してから開ける", "ravenclaw"),
-            "B": ("すぐ開ける", "gryffindor"),
-            "C": ("価値があるか考える", "slytherin"),
-            "D": ("先生に届ける", "hufflepuff")
-        }
-    },
-    {
-        "question": "友人が困っているが、自分にも大事な用事がある。どうする？",
-        "options": {
-            "A": ("助けつつ効率よく終わらせる", "slytherin"),
-            "B": ("迷わず助ける", "hufflepuff"),
-            "C": ("解決策を考えてアドバイス", "ravenclaw"),
-            "D": ("自分を後回しにしてでも助ける", "gryffindor")
-        }
-    },
-    {
-        "question": "未知の魔法書を見つけた。どう扱う？",
-        "options": {
-            "A": ("安全を確認して研究する", "ravenclaw"),
-            "B": ("試してみる", "gryffindor"),
-            "C": ("使い道を考える", "slytherin"),
-            "D": ("共有して皆で読む", "hufflepuff")
-        }
-    },
-    {
-        "question": "勝利が目前だが、ルール違反をすれば確実に勝てる…どうする？",
-        "options": {
-            "A": ("正々堂々戦う", "gryffindor"),
-            "B": ("ルールを守る", "hufflepuff"),
-            "C": ("状況によって判断する", "slytherin"),
-            "D": ("別の方法を考える", "ravenclaw")
-        }
-    }
+    ("廊下の奥から音がする。",
+     {"A":("確かめる","gryffindor"),
+      "B":("観察","ravenclaw"),
+      "C":("整理","slytherin"),
+      "D":("知らせる","hufflepuff")}),
+
+    ("机に箱がある。",
+     {"A":("触る","gryffindor"),
+      "B":("考える","ravenclaw"),
+      "C":("価値判断","slytherin"),
+      "D":("放置","hufflepuff")}),
+
+    ("予定が重なる。",
+     {"A":("重要な方","slytherin"),
+      "B":("両立","ravenclaw"),
+      "C":("先約","hufflepuff"),
+      "D":("直感","gryffindor")}),
+
+    ("本が落ちている。",
+     {"A":("読む","ravenclaw"),
+      "B":("持つ","gryffindor"),
+      "C":("分析","slytherin"),
+      "D":("戻す","hufflepuff")}),
+
+    ("落とし物。",
+     {"A":("届ける","hufflepuff"),
+      "B":("分析","ravenclaw"),
+      "C":("使う","slytherin"),
+      "D":("追う","gryffindor")}),
+
+    ("説明なしの選択。",
+     {"A":("安全","hufflepuff"),
+      "B":("意味","ravenclaw"),
+      "C":("成果","slytherin"),
+      "D":("直感","gryffindor")})
 ]
 
-houses = ["gryffindor", "slytherin", "ravenclaw", "hufflepuff"]
-priority = ["gryffindor", "slytherin", "ravenclaw", "hufflepuff"]
+weights = [1.0, 1.0, 1.2, 1.2, 1.5, 2.0]
 
-completed_users = set()
+house_names = {
+    "gryffindor":"グリフィンドール",
+    "slytherin":"スリザリン",
+    "ravenclaw":"レイブンクロー",
+    "hufflepuff":"ハッフルパフ"
+}
 
-# ===== スタートボタン =====
+comments = {
+    "gryffindor":"行動が速く直感型だ。",
+    "slytherin":"結果重視の判断力がある。",
+    "ravenclaw":"思考と分析が強い。",
+    "hufflepuff":"調和と誠実さを重視する。"
+}
+
+# =====================
+# スタートUI
+# =====================
 class StartView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="はい", style=discord.ButtonStyle.success, custom_id="start_sorting")
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="はい", style=discord.ButtonStyle.success)
+    async def start(self, interaction, button):
 
-        if interaction.user.id in completed_users:
-            await interaction.response.send_message(
-                "…お前はすでに組み分けられておる。",
-                ephemeral=True
-            )
+        uid = str(interaction.user.id)
+
+        # 1回制限
+        if interaction.user.id in data["completed"]:
+            await interaction.response.send_message("…お前はすでに組み分け済みだ。", ephemeral=True)
             return
 
-        scores = {house: 0 for house in houses}
-
-        await interaction.response.send_message(
-            "…おやおや、新しい生徒か。さあ、頭をこちらへ…",
-            ephemeral=True
-        )
-
-        await send_question(interaction, scores, 0)
-
-# ===== 質問UI =====
-class QuestionView(discord.ui.View):
-    def __init__(self, interaction, scores, q_index):
-        super().__init__(timeout=60)
-        self.interaction = interaction
-        self.scores = scores
-        self.q_index = q_index
-
-        q = questions[q_index]
-        for key, (text, house) in q["options"].items():
-            self.add_item(AnswerButton(key, text, house))
-
-class AnswerButton(discord.ui.Button):
-    def __init__(self, key, text, house):
-        super().__init__(label=f"{key}: {text}", style=discord.ButtonStyle.primary)
-        self.house = house
-
-    async def callback(self, interaction: discord.Interaction):
-        view: QuestionView = self.view
-
-        if interaction.user != view.interaction.user:
-            await interaction.response.send_message("これは君の試練ではない…", ephemeral=True)
+        # 途中復帰
+        if uid in data["active_sessions"]:
+            session = data["active_sessions"][uid]
+            await interaction.response.send_message("…続きから始めるぞ。", ephemeral=True)
+            await ask(interaction, session["scores"], session["step"])
             return
 
-        view.scores[self.house] += 1
-        view.stop()
+        scores = {k:0 for k in house_names}
 
-        next_index = view.q_index + 1
+        data["active_sessions"][uid] = {
+            "scores": scores,
+            "step": 0
+        }
+        save_data(data)
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_message("……帽子をかぶりなさい。", ephemeral=True)
+        await ask(interaction, scores, 0)
 
-        if next_index < len(questions):
-            await interaction.followup.send("…なるほど……次へ進もう。", ephemeral=True)
-            await send_question(interaction, view.scores, next_index)
-        else:
-            await interaction.followup.send("…すべて見せてもらった…", ephemeral=True)
-            await show_result(interaction, view.scores)
+# =====================
+# 質問処理
+# =====================
+async def ask(interaction, scores, i):
 
-# ===== 質問送信 =====
-async def send_question(interaction, scores, index):
-    q = questions[index]
+    q, opts = questions[i]
 
-    text = q["question"]
-    for key, (desc, _) in q["options"].items():
-        text += f"\n{key}: {desc}"
+    view = discord.ui.View(timeout=120)
 
-    view = QuestionView(interaction, scores, index)
-    await interaction.followup.send(text, view=view, ephemeral=True)
+    async def make_callback(house):
+        async def callback(inter):
+            await handle(inter, scores, i, house)
+        return callback
 
-# ===== 結果 =====
-async def show_result(interaction, scores):
+    for k,(text,house) in opts.items():
+        btn = discord.ui.Button(label=f"{k}: {text}", style=discord.ButtonStyle.primary)
+        btn.callback = await make_callback(house)
+        view.add_item(btn)
+
+    await interaction.followup.send(f"🧙‍♂️ {q}", view=view, ephemeral=True)
+
+# =====================
+# 回答処理
+# =====================
+async def handle(interaction, scores, i, house):
+
+    uid = str(interaction.user.id)
+
+    scores[house] += weights[i]
+
+    await interaction.response.send_message(comments[house], ephemeral=True)
+
+    await asyncio.sleep(1)
+
+    # 進行保存
+    data["active_sessions"][uid]["step"] = i + 1
+    data["active_sessions"][uid]["scores"] = scores
+    save_data(data)
+
+    if i in [2,4]:
+        await interaction.followup.send("……ふむ……考えさせてもらおう……", ephemeral=True)
+        await asyncio.sleep(1)
+
+    if i+1 < len(questions):
+        await ask(interaction, scores, i+1)
+    else:
+        await result(interaction, scores)
+
+# =====================
+# 結果処理
+# =====================
+async def result(interaction, scores):
+
+    uid = str(interaction.user.id)
+    member = interaction.user
+    guild = interaction.guild
+
     max_score = max(scores.values())
-    candidates = [k for k, v in scores.items() if v == max_score]
+    candidates = [k for k,v in scores.items() if v == max_score]
+    result = candidates[0]
 
-    for house in priority:
-        if house in candidates:
-            result = house
-            break
+    await interaction.followup.send("……決まった。", ephemeral=True)
+    await asyncio.sleep(2)
 
-    messages = {
-        "gryffindor": "グリフィンドール！",
-        "slytherin": "スリザリン！",
-        "ravenclaw": "レイブンクロー！",
-        "hufflepuff": "ハッフルパフ！"
-    }
+    role = discord.utils.get(guild.roles, name=house_names[result])
 
+    if role:
+        try:
+            await member.add_roles(role)
+        except:
+            pass
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    data["house_count"][result] = data["house_count"].get(result,0)+1
+    data["daily_log"].setdefault(today, []).append(result)
+
+    data["completed"].append(member.id)
+
+    if uid in data["active_sessions"]:
+        del data["active_sessions"][uid]
+
+    save_data(data)
+
+    # ユーザー
     await interaction.followup.send(
-        f"…見えるぞ…お前の資質が…\n{messages[result]}",
+        f"🧙‍♂️ {house_names[result]}！\n\n{comments[result]}",
         ephemeral=True
     )
 
-    try:
-        guild = interaction.guild
-        member = interaction.user
+    # 管理チャンネル
+    ch = bot.get_channel(RESULT_CHANNEL_ID)
+    if ch:
+        await ch.send(f"{member.mention} → {house_names[result]}")
 
-        role_map = {
-            "gryffindor": "グリフィンドール",
-            "slytherin": "スリザリン",
-            "ravenclaw": "レイブンクロー",
-            "hufflepuff": "ハッフルパフ"
-        }
+    await send_stats()
 
-        role = discord.utils.get(guild.roles, name=role_map[result])
+# =====================
+# 統計表示
+# =====================
+async def send_stats():
 
-        if role:
-            await member.add_roles(role)
+    ch = bot.get_channel(RESULT_CHANNEL_ID)
+    if not ch:
+        return
 
-    except Exception as e:
-        print(f"ロール付与エラー: {e}")
+    house = data["house_count"]
 
-    completed_users.add(interaction.user.id)
+    today = datetime.now().strftime("%Y-%m-%d")
+    daily = defaultdict(int)
 
-# ===== 起動時 =====
+    for h in data["daily_log"].get(today, []):
+        daily[h]+=1
+
+    rank = sorted(daily.items(), key=lambda x:x[1], reverse=True)
+
+    house_text = "\n".join([f"{k}:{v}" for k,v in house.items()]) or "なし"
+    rank_text = "\n".join([f"{i+1}位 {k}:{v}" for i,(k,v) in enumerate(rank)]) or "なし"
+
+    await ch.send(f"📊統計\n\n🏰寮\n{house_text}\n\n📅今日\n{rank_text}")
+
+# =====================
+# !stats
+# =====================
+@bot.command()
+async def stats(ctx):
+    await send_stats()
+
+# =====================
+# 起動
+# =====================
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
-
+    print("ready")
     bot.add_view(StartView())
 
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send(
-            "🧙‍♂️ 組み分け帽子があなたを待っている…\n診断を始めるかね？",
+    ch = bot.get_channel(CHANNEL_ID)
+    if ch:
+        await ch.send(
+            "🧙‍♂️ 組み分け帽子があなたを待っている…",
             view=StartView()
         )
 
-# ===== 起動 =====
-bot.run(os.getenv("TOKEN"))
+bot.run("TOKEN")
