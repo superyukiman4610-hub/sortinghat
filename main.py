@@ -2,23 +2,6 @@ import discord
 from discord.ext import commands
 import os
 
-# ===== keep alive（UptimeRobot用）=====
-from flask import Flask
-from threading import Thread
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "I'm alive!"
-
-def run():
-    app.run(host='0.0.0.0', port=3000)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
 # ===== Discord設定 =====
 intents = discord.Intents.default()
 intents.message_content = True
@@ -27,6 +10,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ===== 設定 =====
 CHANNEL_ID = 1500520708974051498
 
 # ===== 質問 =====
@@ -80,6 +64,7 @@ questions = [
 
 houses = ["gryffindor", "slytherin", "ravenclaw", "hufflepuff"]
 priority = ["gryffindor", "slytherin", "ravenclaw", "hufflepuff"]
+
 completed_users = set()
 
 # ===== スタートボタン =====
@@ -213,5 +198,4 @@ async def on_ready():
         )
 
 # ===== 起動 =====
-keep_alive()
 bot.run(os.getenv("TOKEN"))
