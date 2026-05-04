@@ -278,4 +278,4 @@ async def on_ready():
             view=StartView()
         )
 
-bot.run("DISCORD_TOKEN")
+bot.run(os.getenv("DISCORD_TOKEN"))
