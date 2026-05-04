@@ -6,6 +6,9 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
+# =====================
+# Intents設定
+# =====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -14,10 +17,10 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =====================
-# チャンネル設定（固定）
+# チャンネルID
 # =====================
-CHANNEL_ID = 1500520708974051498        # 診断専用
-RESULT_CHANNEL_ID = 1500500850311954534  # 管理チャンネル
+CHANNEL_ID = 1500520708974051498        # 診断チャンネル
+RESULT_CHANNEL_ID = 1500500850311954534 # 管理チャンネル
 
 DATA_FILE = "data.json"
 
@@ -30,7 +33,8 @@ def load_data():
             "house_count": {},
             "daily_log": {},
             "completed": [],
-            "active_sessions": {}
+            "active_sessions": {},
+            "posted_init": False
         }
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -41,47 +45,39 @@ def save_data(data):
 
 data = load_data()
 
-completed = set()
-
 # =====================
-# 質問
+# 診断データ
 # =====================
 questions = [
-    ("廊下の奥から音がする。",
-     {"A":("確かめる","gryffindor"),
-      "B":("観察","ravenclaw"),
-      "C":("整理","slytherin"),
-      "D":("知らせる","hufflepuff")}),
+    ("廊下の奥から音がする。", {"A":("確かめる","gryffindor"),
+                         "B":("観察","ravenclaw"),
+                         "C":("整理","slytherin"),
+                         "D":("知らせる","hufflepuff")}),
 
-    ("机に箱がある。",
-     {"A":("触る","gryffindor"),
-      "B":("考える","ravenclaw"),
-      "C":("価値判断","slytherin"),
-      "D":("放置","hufflepuff")}),
+    ("机に箱がある。", {"A":("触る","gryffindor"),
+                   "B":("考える","ravenclaw"),
+                   "C":("価値判断","slytherin"),
+                   "D":("放置","hufflepuff")}),
 
-    ("予定が重なる。",
-     {"A":("重要な方","slytherin"),
-      "B":("両立","ravenclaw"),
-      "C":("先約","hufflepuff"),
-      "D":("直感","gryffindor")}),
+    ("予定が重なる。", {"A":("重要な方","slytherin"),
+                   "B":("両立","ravenclaw"),
+                   "C":("先約","hufflepuff"),
+                   "D":("直感","gryffindor")}),
 
-    ("本が落ちている。",
-     {"A":("読む","ravenclaw"),
-      "B":("持つ","gryffindor"),
-      "C":("分析","slytherin"),
-      "D":("戻す","hufflepuff")}),
+    ("本が落ちている。", {"A":("読む","ravenclaw"),
+                     "B":("持つ","gryffindor"),
+                     "C":("分析","slytherin"),
+                     "D":("戻す","hufflepuff")}),
 
-    ("落とし物。",
-     {"A":("届ける","hufflepuff"),
-      "B":("分析","ravenclaw"),
-      "C":("使う","slytherin"),
-      "D":("追う","gryffindor")}),
+    ("落とし物。", {"A":("届ける","hufflepuff"),
+               "B":("分析","ravenclaw"),
+               "C":("使う","slytherin"),
+               "D":("追う","gryffindor")}),
 
-    ("説明なしの選択。",
-     {"A":("安全","hufflepuff"),
-      "B":("意味","ravenclaw"),
-      "C":("成果","slytherin"),
-      "D":("直感","gryffindor")})
+    ("説明なしの選択。", {"A":("安全","hufflepuff"),
+                   "B":("意味","ravenclaw"),
+                   "C":("成果","slytherin"),
+                   "D":("直感","gryffindor")})
 ]
 
 weights = [1.0, 1.0, 1.2, 1.2, 1.5, 2.0]
@@ -112,12 +108,10 @@ class StartView(discord.ui.View):
 
         uid = str(interaction.user.id)
 
-        # 1回制限
         if interaction.user.id in data["completed"]:
             await interaction.response.send_message("…お前はすでに組み分け済みだ。", ephemeral=True)
             return
 
-        # 途中復帰
         if uid in data["active_sessions"]:
             session = data["active_sessions"][uid]
             await interaction.response.send_message("…続きから始めるぞ。", ephemeral=True)
@@ -136,7 +130,7 @@ class StartView(discord.ui.View):
         await ask(interaction, scores, 0)
 
 # =====================
-# 質問処理
+# 質問
 # =====================
 async def ask(interaction, scores, i):
 
@@ -157,7 +151,7 @@ async def ask(interaction, scores, i):
     await interaction.followup.send(f"🧙‍♂️ {q}", view=view, ephemeral=True)
 
 # =====================
-# 回答処理
+# 回答
 # =====================
 async def handle(interaction, scores, i, house):
 
@@ -169,13 +163,12 @@ async def handle(interaction, scores, i, house):
 
     await asyncio.sleep(1)
 
-    # 進行保存
     data["active_sessions"][uid]["step"] = i + 1
     data["active_sessions"][uid]["scores"] = scores
     save_data(data)
 
     if i in [2,4]:
-        await interaction.followup.send("……ふむ……考えさせてもらおう……", ephemeral=True)
+        await interaction.followup.send("……ふむ……", ephemeral=True)
         await asyncio.sleep(1)
 
     if i+1 < len(questions):
@@ -184,7 +177,7 @@ async def handle(interaction, scores, i, house):
         await result(interaction, scores)
 
 # =====================
-# 結果処理
+# 結果
 # =====================
 async def result(interaction, scores):
 
@@ -219,63 +212,44 @@ async def result(interaction, scores):
 
     save_data(data)
 
-    # ユーザー
     await interaction.followup.send(
         f"🧙‍♂️ {house_names[result]}！\n\n{comments[result]}",
         ephemeral=True
     )
 
-    # 管理チャンネル
     ch = bot.get_channel(RESULT_CHANNEL_ID)
     if ch:
         await ch.send(f"{member.mention} → {house_names[result]}")
 
-    await send_stats()
-
 # =====================
-# 統計表示
-# =====================
-async def send_stats():
-
-    ch = bot.get_channel(RESULT_CHANNEL_ID)
-    if not ch:
-        return
-
-    house = data["house_count"]
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    daily = defaultdict(int)
-
-    for h in data["daily_log"].get(today, []):
-        daily[h]+=1
-
-    rank = sorted(daily.items(), key=lambda x:x[1], reverse=True)
-
-    house_text = "\n".join([f"{k}:{v}" for k,v in house.items()]) or "なし"
-    rank_text = "\n".join([f"{i+1}位 {k}:{v}" for i,(k,v) in enumerate(rank)]) or "なし"
-
-    await ch.send(f"📊統計\n\n🏰寮\n{house_text}\n\n📅今日\n{rank_text}")
-
-# =====================
-# !stats
-# =====================
-@bot.command()
-async def stats(ctx):
-    await send_stats()
-
-# =====================
-# 起動
+# 初期投稿（重複防止・安定版）
 # =====================
 @bot.event
 async def on_ready():
     print("ready")
+
     bot.add_view(StartView())
 
-    ch = bot.get_channel(CHANNEL_ID)
-    if ch:
+    if data.get("posted_init"):
+        return
+
+    try:
+        ch = await bot.fetch_channel(CHANNEL_ID)
+
         await ch.send(
-            "🧙‍♂️ 組み分け帽子があなたを待っている…",
+            "🧙‍♂️ 組み分け帽子があなたを待っている…\n診断を始めるかね？",
             view=StartView()
         )
 
-bot.run(os.getenv("DISCORD_TOKEN"))
+        data["posted_init"] = True
+        save_data(data)
+
+        print("初期メッセージ送信成功")
+
+    except Exception as e:
+        print("初期送信エラー:", e)
+
+# =====================
+# 起動
+# =====================
+bot.run("DISCORD_TOKEN")
