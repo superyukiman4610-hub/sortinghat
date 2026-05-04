@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime
 
 # =====================
-# Intents設定
+# Bot設定
 # =====================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -23,6 +23,7 @@ CHANNEL_ID = 1500520708974051498        # 診断チャンネル
 RESULT_CHANNEL_ID = 1500500850311954534 # 管理チャンネル
 
 DATA_FILE = "data.json"
+PANEL_FILE = "panel.json"
 
 # =====================
 # データ管理
@@ -33,8 +34,7 @@ def load_data():
             "house_count": {},
             "daily_log": {},
             "completed": [],
-            "active_sessions": {},
-            "posted_init": False
+            "active_sessions": {}
         }
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -46,7 +46,20 @@ def save_data(data):
 data = load_data()
 
 # =====================
-# 診断データ
+# パネル管理（固定UI）
+# =====================
+def load_panel():
+    if not os.path.exists(PANEL_FILE):
+        return {}
+    with open(PANEL_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_panel(p):
+    with open(PANEL_FILE, "w", encoding="utf-8") as f:
+        json.dump(p, f)
+
+# =====================
+# 診断データ（6問）
 # =====================
 questions = [
     ("廊下の奥から音がする。", {"A":("確かめる","gryffindor"),
@@ -74,7 +87,7 @@ questions = [
                "C":("使う","slytherin"),
                "D":("追う","gryffindor")}),
 
-    ("説明なしの選択。", {"A":("安全","hufflepuff"),
+    ("説明のない選択。", {"A":("安全","hufflepuff"),
                    "B":("意味","ravenclaw"),
                    "C":("成果","slytherin"),
                    "D":("直感","gryffindor")})
@@ -114,7 +127,7 @@ class StartView(discord.ui.View):
 
         if uid in data["active_sessions"]:
             session = data["active_sessions"][uid]
-            await interaction.response.send_message("…続きから始めるぞ。", ephemeral=True)
+            await interaction.response.send_message("…続きからだ。", ephemeral=True)
             await ask(interaction, session["scores"], session["step"])
             return
 
@@ -151,7 +164,7 @@ async def ask(interaction, scores, i):
     await interaction.followup.send(f"🧙‍♂️ {q}", view=view, ephemeral=True)
 
 # =====================
-# 回答
+# 回答処理
 # =====================
 async def handle(interaction, scores, i, house):
 
@@ -168,7 +181,7 @@ async def handle(interaction, scores, i, house):
     save_data(data)
 
     if i in [2,4]:
-        await interaction.followup.send("……ふむ……", ephemeral=True)
+        await interaction.followup.send("……考えさせてもらおう……", ephemeral=True)
         await asyncio.sleep(1)
 
     if i+1 < len(questions):
@@ -222,32 +235,35 @@ async def result(interaction, scores):
         await ch.send(f"{member.mention} → {house_names[result]}")
 
 # =====================
-# 初期投稿（重複防止・安定版）
+# 固定パネル（超安定）
 # =====================
 @bot.event
 async def on_ready():
-    print("ready")
+    print("Bot起動")
 
     bot.add_view(StartView())
 
-    if data.get("posted_init"):
-        return
+    channel = await bot.fetch_channel(CHANNEL_ID)
+
+    panel = load_panel()
+    msg_id = panel.get("message_id")
+
+    content = "🧙‍♂️ 組み分け帽子があなたを待っている…\n診断を始めるかね？"
 
     try:
-        ch = await bot.fetch_channel(CHANNEL_ID)
+        if msg_id:
+            msg = await channel.fetch_message(msg_id)
+            await msg.edit(content=content, view=StartView())
+            print("パネル更新")
+            return
+    except:
+        print("新規パネル作成")
 
-        await ch.send(
-            "🧙‍♂️ 組み分け帽子があなたを待っている…\n診断を始めるかね？",
-            view=StartView()
-        )
+    msg = await channel.send(content, view=StartView())
 
-        data["posted_init"] = True
-        save_data(data)
+    save_panel({"message_id": msg.id})
 
-        print("初期メッセージ送信成功")
-
-    except Exception as e:
-        print("初期送信エラー:", e)
+    print("パネル設置完了")
 
 # =====================
 # 起動
